@@ -1,0 +1,20 @@
+项目目录/
+├── rtl/                          # 源代码目录
+│   ├── cpu_core.v                # CPU顶层模块
+│   ├── instruction_fetcher.v     # 取指模块
+│   ├── instruction_decoder.v     # 译码模块
+│   ├── arithmetic_unit.v         # 执行/ALU模块
+│   ├── memory_access.v           # 访存模块
+│   ├── result_writer.v           # 写回模块
+│   ├── data_forwarder.v          # 前推单元
+│   ├── pipeline_controller.v     # 流水线控制器
+│   ├── register_bank.v           # 寄存器堆
+│   ├── data_storage.v            # 数据存储器
+│   ├── program_storage.v         # 指令存储器
+│   ├── interrupt_handler.v       # 中断控制器
+│   └── cpu_tb.v                  # 测试平台
+├── build/                        # 编译输出目录 (自动创建)
+│   ├── cpu_sim                   # 可执行文件
+│   └── cpu_waveform.vcd          # 波形文件
+├── run.sh                        # 运行脚本
+└── README.md                     # 说明文档
