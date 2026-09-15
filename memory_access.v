@@ -1,6 +1,6 @@
 // ============================================================
-// �ô�ģ��
-// ���ݴ洢������
+// 访存模块 - 5 级流水线的 MEM/WB 寄存器
+// 输出 MEM/WB 流水线寄存器
 // ============================================================
 
 module memory_access (
@@ -29,13 +29,12 @@ module memory_access (
             mem_rd     <= 5'b0;
             mem_valid  <= 1'b0;
             mem_wr_en  <= 1'b0;
-        end else if (flush) begin
-            mem_valid <= 1'b0;
-        end else if (ex_valid) begin
+        end else begin
             mem_result <= wb_data;
             mem_rd     <= ex_rd;
-            mem_valid  <= 1'b1;
-            mem_wr_en  <= (ex_is_alu || ex_is_load) && (ex_rd != 5'b0);
+            mem_valid  <= ex_valid;
+            // ★★★ 修复：去掉 ex_rd != 0 的限制 ★★★
+            mem_wr_en  <= ex_valid && (ex_is_alu || ex_is_load);
         end
     end
 

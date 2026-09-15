@@ -1,12 +1,11 @@
 // ============================================================
-// д��ģ��
-// ѡ������д�ؼĴ���
+// 写回模块 - 5 级流水线的备用 MEM/WB 寄存器
+// 与 memory_access.v 同源，用于验证与对照
 // ============================================================
 
 module result_writer (
     input  wire        clk,
     input  wire        rst_n,
-    input  wire        flush,
     input  wire [31:0] ex_result,
     input  wire [4:0]  ex_rd,
     input  wire        ex_valid,
@@ -27,13 +26,12 @@ module result_writer (
             mem_rd     <= 5'b0;
             mem_valid  <= 1'b0;
             mem_wr_en  <= 1'b0;
-        end else if (flush) begin
-            mem_valid <= 1'b0;
-        end else if (ex_valid) begin
+        end else begin
             mem_result <= wb_data;
             mem_rd     <= ex_rd;
-            mem_valid  <= 1'b1;
-            mem_wr_en  <= (ex_is_alu || ex_is_load) && (ex_rd != 5'b0);
+            mem_valid  <= ex_valid;
+            // ★★★ 修复：去掉 ex_rd != 0 的限制 ★★★
+            mem_wr_en  <= ex_valid && (ex_is_alu || ex_is_load);
         end
     end
 

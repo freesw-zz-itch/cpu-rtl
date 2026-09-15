@@ -1,6 +1,7 @@
 // ============================================================
-// Ö¸ÁîÒëÂëÆ÷
-// ÒëÂë + Ç°ÍÆ¿ØÖÆ + Á¢¼´ÊıÀ©Õ¹
+// æŒ‡ä»¤è¯‘ç å™¨ - 5 çº§æµæ°´çº¿
+// è¾“å‡º ID/EX æµæ°´çº¿å¯„å­˜å™¨
+// åœé¡¿/flush æ—¶æ’å…¥æ°”æ³¡
 // ============================================================
 
 `include "cpu_defines.v"
@@ -13,23 +14,23 @@ module instruction_decoder (
     input  wire        if_valid,
     input  wire        stall,
     input  wire        flush,
-    // ¼Ä´æÆ÷¶Á¶Ë¿Ú
+    // å¯„å­˜å™¨è¯»ç«¯å£
     output wire [4:0]  reg_rd_addr_a,
     output wire [4:0]  reg_rd_addr_b,
     input  wire [31:0] reg_rd_data_a,
     input  wire [31:0] reg_rd_data_b,
-    // Ç°ÍÆÊı¾İ
-    input  wire [31:0] fwd_alu_ex,
-    input  wire [31:0] fwd_alu_mem,
-    input  wire [4:0]  fwd_rd_ex,
-    input  wire [4:0]  fwd_rd_mem,
+    // å‰æ¨æ•°æ® (EX/MEM å’Œ MEM/WB)
+    input  wire [31:0] fwd_alu_ex,      // EX/MEM ç»“æœ
+    input  wire [31:0] fwd_alu_mem,     // MEM/WB ç»“æœ
+    input  wire [4:0]  fwd_rd_ex,       // EX/MEM rd
+    input  wire [4:0]  fwd_rd_mem,      // MEM/WB rd
     input  wire        fwd_valid_ex,
     input  wire        fwd_valid_mem,
     input  wire        fwd_wr_en_ex,
     input  wire        fwd_wr_en_mem,
     input  wire [1:0]  fwd_a,
     input  wire [1:0]  fwd_b,
-    // Êä³ö
+    // è¾“å‡ºåˆ° EX
     output reg  [31:0] id_pc,
     output reg  [31:0] id_instr,
     output reg  [31:0] id_rs1,
@@ -43,37 +44,28 @@ module instruction_decoder (
     output reg         id_is_alu
 );
 
-    // Ö¸Áî×Ö¶Î
     wire [4:0]  opcode = if_instr[31:27];
     wire [4:0]  rd     = if_instr[26:22];
     wire [4:0]  rs1    = if_instr[21:17];
     wire [4:0]  rs2    = if_instr[16:12];
     wire [11:0] imm    = if_instr[11:0];
-    
-    // ·ûºÅÀ©Õ¹
+
     wire signed [31:0] imm_se = {{20{imm[11]}}, imm};
 
-    // Ö¸ÁîÀàĞÍÊ¶±ğ (Ê¹ÓÃºê¶¨Òå)
     wire is_branch = (opcode == `OP_BEQ);
     wire is_jump   = (opcode == `OP_JMP);
     wire is_load   = (opcode == `OP_LW);
-    wire is_move   = (opcode == `OP_MOVE);
-    wire is_addi   = (opcode == `OP_ADDI);
-    wire is_subi   = (opcode == `OP_SUBI);
-    
-    // ALU Ö¸ÁîÅĞ¶Ï (Ê¹ÓÃºê)
     wire is_alu    = `IS_ALU_OP(opcode);
 
-    // Ö»ÓĞ·Ç·ÖÖ§/Ìø×ªÖ¸Áî²Å²úÉú id_valid
+    // åˆ†æ”¯/è·³è½¬ä¸è¿›å…¥ ID/EX
     wire id_valid_next = if_valid && !is_branch && !is_jump;
 
-    // ¼Ä´æÆ÷¶ÁµØÖ·
     assign reg_rd_addr_a = rs1;
     assign reg_rd_addr_b = rs2;
 
     reg [31:0] rs1_val, rs2_val;
 
-    // Ç°ÍÆ MUX
+    // å‰æ¨ MUX
     always @* begin
         case (fwd_a)
             `FWD_NONE: rs1_val = reg_rd_data_a;
@@ -92,7 +84,9 @@ module instruction_decoder (
         endcase
     end
 
-    // ID/EX Á÷Ë®Ïß¼Ä´æÆ÷
+    // ============================================================
+    // ID/EX æµæ°´çº¿å¯„å­˜å™¨
+    // ============================================================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             id_pc        <= 32'b0;
@@ -106,7 +100,8 @@ module instruction_decoder (
             id_is_jump   <= 1'b0;
             id_is_load   <= 1'b0;
             id_is_alu    <= 1'b0;
-        end else if (flush) begin
+        end else if (flush || stall) begin
+            // æ’å…¥æ°”æ³¡
             id_pc        <= 32'b0;
             id_instr     <= 32'b0;
             id_rs1       <= 32'b0;
@@ -118,7 +113,7 @@ module instruction_decoder (
             id_is_jump   <= 1'b0;
             id_is_load   <= 1'b0;
             id_is_alu    <= 1'b0;
-        end else if (!stall && if_valid) begin
+        end else if (if_valid) begin
             id_pc        <= if_pc;
             id_instr     <= if_instr;
             id_rs1       <= rs1_val;

@@ -1,7 +1,6 @@
 // ============================================================
-// ËãÊõÂß¼­µ¥Ôª (ALU)
-// ÔËËã + ·ÖÖ§Ä¿±ê¼ÆËã + ·Ã´æµØÖ·¼ÆËã
-// Ö§³ÖÁ¢¼´ÊıÄ£Ê½: µ± rs2 == 0 Ê±£¬Ê¹ÓÃÁ¢¼´Êı
+// ç®—æœ¯é€»è¾‘å•å…ƒ (ALU) - 5 çº§æµæ°´çº¿ç‰ˆæœ¬
+// è´Ÿè´£ EX é˜¶æ®µï¼šALU è¿ç®— + äº§ç”Ÿ EX/MEM æµæ°´çº¿å¯„å­˜å™¨
 // ============================================================
 
 `include "cpu_defines.v"
@@ -9,7 +8,7 @@
 module arithmetic_unit (
     input  wire        clk,
     input  wire        rst_n,
-    // À´×ÔÒëÂë½×¶ÎµÄÊäÈë
+    // æ¥è‡ª ID/EX å¯„å­˜å™¨
     input  wire [31:0] id_pc,
     input  wire [31:0] id_instr,
     input  wire [31:0] id_rs1,
@@ -21,20 +20,12 @@ module arithmetic_unit (
     input  wire        id_is_jump,
     input  wire        id_is_load,
     input  wire        id_is_alu,
-    input  wire        stall,
-    input  wire        flush,
-    input  wire [31:0] dmem_rd_data,
-    // Êı¾İ´æ´¢Æ÷½Ó¿Ú
-    output wire [31:0] dmem_addr,
-    output wire [31:0] dmem_wr_data,
-    output wire        dmem_wr_en,
-    // ·ÖÖ§¿ØÖÆ (Êä³öµ½IF)
+    // åˆ†æ”¯ / ä¸­æ–­è¾“å‡º
     output reg         branch_taken,
     output reg  [31:0] branch_target,
-    // ÖĞ¶Ï¿ØÖÆ
     output reg         int_trigger,
     output reg         iret_trigger,
-    // EX/MEM Á÷Ë®ÏßÊä³ö
+    // EX/MEM æµæ°´çº¿è¾“å‡º
     output reg  [31:0] alu_result,
     output reg  [31:0] ex_rs2,
     output reg  [4:0]  ex_rd,
@@ -43,181 +34,68 @@ module arithmetic_unit (
     output reg         ex_reg_wr_en,
     output reg         ex_is_load,
     output reg         ex_is_alu,
-    output reg [31:0]  fwd_alu_ex,
-    output reg [31:0]  fwd_alu_mem,
-    output reg [4:0]   fwd_rd_ex,
-    // µ÷ÊÔ
+    // è°ƒè¯•
     output wire [31:0] debug_alu
 );
 
-    wire [4:0]  opcode = id_instr[31:27];
+    wire [4:0]  opcode    = id_instr[31:27];
     wire [4:0]  rs1_field = id_instr[21:17];
     wire [4:0]  rs2_field = id_instr[16:12];
     reg  [31:0] alu_out;
-    
-    // ¸¨ÖúĞÅºÅ
+
     wire imm_mode = (rs2_field == `REG_R0);
-    wire is_sw    = (opcode == `OP_SW);
 
     // ============================================================
-    // ALU ÔËËã
+    // ALU ç»„åˆè¿ç®—
     // ============================================================
     always @* begin
         case (opcode)
-            // ============================================================
-            // ADD: ¼Ó·¨
-            // ============================================================
-            `OP_ADD: begin
-                if (imm_mode)
-                    alu_out = $signed(id_rs1) + $signed(id_imm);
-                else
-                    alu_out = $signed(id_rs1) + $signed(id_rs2);
-            end
-
-            // ============================================================
-            // SUB: ¼õ·¨
-            // ============================================================
-            `OP_SUB: begin
-                if (imm_mode)
-                    alu_out = $signed(id_rs1) - $signed(id_imm);
-                else
-                    alu_out = $signed(id_rs1) - $signed(id_rs2);
-            end
-
-            // ============================================================
-            // MUL: ³Ë·¨
-            // ============================================================
-            `OP_MUL: begin
-                if (imm_mode)
-                    alu_out = $signed(id_rs1) * $signed(id_imm);
-                else
-                    alu_out = $signed(id_rs1) * $signed(id_rs2);
-            end
-
-            // ============================================================
-            // DIV: ³ı·¨
-            // ============================================================
-            `OP_DIV: begin
-                if (imm_mode)
-                    alu_out = (id_imm == 0) ? 32'b0 : $signed(id_rs1) / $signed(id_imm);
-                else
-                    alu_out = (id_rs2 == 0) ? 32'b0 : $signed(id_rs1) / $signed(id_rs2);
-            end
-
-            // ============================================================
-            // ADDI: Á¢¼´Êı¼Ó·¨
-            // ============================================================
-            `OP_ADDI: begin
-                alu_out = $signed(id_rs1) + $signed(id_imm);
-            end
-
-            // ============================================================
-            // SUBI: Á¢¼´Êı¼õ·¨
-            // ============================================================
-            `OP_SUBI: begin
-                alu_out = $signed(id_rs1) - $signed(id_imm);
-            end
-
-            // ============================================================
-            // SHL: Âß¼­×óÒÆ
-            // ============================================================
-            `OP_SHL: alu_out = id_rs1 << id_imm[4:0];
-
-            // ============================================================
-            // SHR: Âß¼­ÓÒÒÆ
-            // ============================================================
-            `OP_SHR: alu_out = id_rs1 >> id_imm[4:0];
-
-            // ============================================================
-            // AND: °´Î»Óë
-            // ============================================================
-            `OP_AND: begin
-                if (imm_mode)
-                    alu_out = id_rs1 & id_imm;
-                else
-                    alu_out = id_rs1 & id_rs2;
-            end
-
-            // ============================================================
-            // OR: °´Î»»ò
-            // ============================================================
-            `OP_OR: begin
-                if (imm_mode)
-                    alu_out = id_rs1 | id_imm;
-                else
-                    alu_out = id_rs1 | id_rs2;
-            end
-
-            // ============================================================
-            // XOR: °´Î»Òì»ò
-            // ============================================================
-            `OP_XOR: begin
-                if (imm_mode)
-                    alu_out = id_rs1 ^ id_imm;
-                else
-                    alu_out = id_rs1 ^ id_rs2;
-            end
-
-            // ============================================================
-            // LW: ¼ÓÔØ×Ö (µØÖ·¼ÆËã)
-            // ============================================================
-            `OP_LW: alu_out = id_rs1 + id_imm;
-
-            // ============================================================
-            // SW: ´æ´¢×Ö (µØÖ·¼ÆËã)
-            // ============================================================
-            `OP_SW: alu_out = id_rs1 + id_imm;
-
-            // ============================================================
-            // MOVE: Êı¾İÒÆ¶¯
-            // ============================================================
-            `OP_MOVE: begin
-                if (rs1_field == `REG_R0)
-                    alu_out = id_imm;   // MOVE Rd, #imm
-                else
-                    alu_out = id_rs1;   // MOVE Rd, Rs1
-            end
-
-            // ============================================================
-            // Ä¬ÈÏ: Êä³ö 0
-            // ============================================================
-            default: alu_out = 32'b0;
+            `OP_ADD:  alu_out = imm_mode ? (id_rs1 + id_imm) : (id_rs1 + id_rs2);
+            `OP_SUB:  alu_out = imm_mode ? (id_rs1 - id_imm) : (id_rs1 - id_rs2);
+            `OP_MUL:  alu_out = imm_mode ? (id_rs1 * id_imm) : (id_rs1 * id_rs2);
+            `OP_DIV:  alu_out = imm_mode ? ((id_imm==0) ? 32'b0 : id_rs1/id_imm)
+                                         : ((id_rs2==0) ? 32'b0 : id_rs1/id_rs2);
+            `OP_ADDI: alu_out = id_rs1 + id_imm;
+            `OP_SUBI: alu_out = id_rs1 - id_imm;
+            `OP_SHL:  alu_out = id_rs1 << id_imm[4:0];
+            `OP_SHR:  alu_out = id_rs1 >> id_imm[4:0];
+            `OP_AND:  alu_out = imm_mode ? (id_rs1 & id_imm) : (id_rs1 & id_rs2);
+            `OP_OR:   alu_out = imm_mode ? (id_rs1 | id_imm) : (id_rs1 | id_rs2);
+            `OP_XOR:  alu_out = imm_mode ? (id_rs1 ^ id_imm) : (id_rs1 ^ id_rs2);
+            `OP_LW:   alu_out = id_rs1 + id_imm;
+            `OP_SW:   alu_out = id_rs1 + id_imm;
+            `OP_MOVE: alu_out = (rs1_field == `REG_R0) ? id_imm : id_rs1;
+            default:  alu_out = 32'b0;
         endcase
     end
 
     // ============================================================
-    // ·ÖÖ§/Ìø×ªÂß¼­
+    // åˆ†æ”¯ / è·³è½¬åˆ¤æ–­
     // ============================================================
     always @* begin
-        branch_taken = 1'b0;
+        branch_taken  = 1'b0;
         branch_target = 32'b0;
-        if (id_is_branch && id_valid && id_rs1 == id_rs2) begin
-            branch_taken = 1'b1;
+        if (id_is_branch && id_valid && (id_rs1 == id_rs2)) begin
+            branch_taken  = 1'b1;
             branch_target = id_pc + id_imm;
         end else if (id_is_jump && id_valid) begin
-            branch_taken = 1'b1;
+            branch_taken  = 1'b1;
             branch_target = id_imm;
         end
     end
 
     // ============================================================
-    // ÖĞ¶Ï¿ØÖÆ
+    // ä¸­æ–­
     // ============================================================
     always @* begin
         int_trigger  = (opcode == `OP_INT)  && id_valid;
         iret_trigger = (opcode == `OP_IRET) && id_valid;
     end
 
-    // ============================================================
-    // Êı¾İ´æ´¢Æ÷½Ó¿Ú
-    // ============================================================
-    assign dmem_addr    = alu_out;
-    assign dmem_wr_data = id_rs2;
-    assign dmem_wr_en   = (opcode == `OP_SW) && id_valid;
-    assign debug_alu    = alu_out;
+    assign debug_alu = alu_out;
 
     // ============================================================
-    // EX/MEM Á÷Ë®Ïß¼Ä´æÆ÷
+    // EX/MEM æµæ°´çº¿å¯„å­˜å™¨
     // ============================================================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -238,21 +116,16 @@ module arithmetic_unit (
             ex_reg_wr_en <= (id_is_alu || id_is_load);
             ex_is_load   <= id_is_load;
             ex_is_alu    <= id_is_alu;
-        end
-    end
-
-    // ============================================================
-    // Ç°ÍÆÊı¾İµ½ EX/MEM ½×¶Î
-    // ============================================================
-    always @(*) begin
-        if (!rst_n) begin
-            fwd_alu_ex  <= 32'b0;
-            fwd_alu_mem <= 32'b0;
-            fwd_rd_ex   <= 5'b0;
-        end else if (id_valid) begin
-            fwd_alu_ex  <= alu_out;
-            fwd_alu_mem <= alu_result;
-            fwd_rd_ex   <= id_rd;
+        end else begin
+            // æ°”æ³¡
+            alu_result   <= 32'b0;
+            ex_rs2       <= 32'b0;
+            ex_rd        <= 5'b0;
+            ex_valid     <= 1'b0;
+            ex_mem_wr_en <= 1'b0;
+            ex_reg_wr_en <= 1'b0;
+            ex_is_load   <= 1'b0;
+            ex_is_alu    <= 1'b0;
         end
     end
 

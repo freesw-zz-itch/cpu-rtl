@@ -1,12 +1,8 @@
 // ============================================================
-// 核心 CPU 模块 - 支持双口RAM
-// - 三级流水线: 取指(IF) → 译码(ID) → 执行(EX)
-// - 32 个通用寄存器
-// - 16 条指令扩展 (5位 opcode)
-// - 完整中断机制 (保存 PC 和 STATUS)
-// - 双口数据存储器读写支持
-// - 流水线停顿 (stall) 控制
-// - 测试接口: 寄存器/内存直接读写
+// 核心 CPU 模块 - 5 级流水线
+// IF → ID → EX → MEM → WB
+// 使用 memory_access 作为主 MEM/WB 寄存器
+// 使用 result_writer 作为备用 MEM/WB 寄存器（对照）
 // ============================================================
 
 `include "cpu_defines.v"
@@ -15,85 +11,77 @@ module cpu_core (
     input  wire        clk,
     input  wire        rst_n,
     input  wire        irq,
-    input  wire        pause,        // ← 新增：外部暂停
-    // 测试接口: 寄存器读写
+    input  wire        pause,
+    // 测试接口: 寄存器
     input  wire        test_reg_wr_en,
     input  wire [4:0]  test_reg_addr,
     input  wire [31:0] test_reg_wr_data,
     output wire [31:0] test_reg_rd_data,
-    // 测试接口: 内存读写 (双口)
+    // 测试接口: 内存
     input  wire        test_mem_wr_en,
     input  wire [31:0] test_mem_addr,
     input  wire [31:0] test_mem_wr_data,
     output wire [31:0] test_mem_rd_data,
-    // 调试输出
+    // 调试
     output wire [31:0] debug_pc,
     output wire [31:0] debug_instr,
     output wire [31:0] debug_alu_result
 );
 
     // ============================================================
-    // ★★★ 重要: 所有 reg 声明必须放在 wire 声明之前 ★★★
+    // 内部寄存器
     // ============================================================
-
-    // 1. 内部状态: PC 和 STATUS
     reg [31:0] pc;
     reg [31:0] status;
 
-    // 2. 流水线寄存器 (IF/ID, ID/EX)
+    // IF/ID
     reg [31:0] ifidinstr;
     reg [31:0] ifidpc;
     reg        ifidvalid;
 
-    reg [31:0] idexinstr;
-    reg [31:0] idexpc;
-    reg [31:0] idexrs1val;
-    reg [31:0] idexrs2val;
-    reg [4:0]  idexrd;
-    reg        idexvalid;
-
-    // 3. 中断相关信号
+    // 中断状态
     reg         irq_active;
-    reg [31:0]  irq_saved_pc;
-    reg [31:0]  irq_saved_status;
 
-    // 4. 测试接口寄存器
+    // 测试接口
     reg [31:0] test_reg_read_data;
-    reg [31:0] test_mem_read_data;
 
     // ============================================================
-    // ★★★ 以下为 wire 声明 ★★★
+    // Wire 声明
     // ============================================================
 
-    // IF <-> ID 连接
+    // IF <-> ID
     wire [31:0] if_pc, if_instr;
     wire        if_valid;
 
-    // ID <-> EX 连接
+    // ID <-> EX (来自 instruction_decoder 的 ID/EX 寄存器)
     wire [31:0] id_pc, id_instr, id_rs1, id_rs2, id_imm;
     wire [4:0]  id_rd;
     wire        id_valid;
     wire        id_is_branch, id_is_jump, id_is_load, id_is_alu;
 
-    // EX 输出
+    // EX/MEM 输出 (来自 arithmetic_unit)
     wire [31:0] ex_alu_result, ex_rs2;
     wire [4:0]  ex_rd;
     wire        ex_valid, ex_mem_wr_en, ex_reg_wr_en, ex_is_load, ex_is_alu;
     wire        int_trigger, iret_trigger;
 
-    // // 数据存储器连接 (双口)
-    // wire [31:0] dmem_addr, dmem_wr_data;
-    // wire        dmem_wr_en;
-    // wire [31:0] dmem_data_a;  // 端口A读数据
-    // wire [31:0] dmem_data_b;  // 端口B读数据 (测试接口用)
+    // MEM/WB 输出 (来自 memory_access)
+    wire [31:0] mem_result;
+    wire [4:0]  mem_rd;
+    wire        mem_valid, mem_wr_en;
 
-    // 数据存储器连接 (双口)
+    // MEM/WB 备用输出 (来自 result_writer)
+    wire [31:0] wb_result_alt;
+    wire [4:0]  wb_rd_alt;
+    wire        wb_valid_alt, wb_wr_en_alt;
+
+    // 数据存储器接口
     wire [31:0] dmem_addr, dmem_wr_data;
     wire        dmem_wr_en;
-    wire [31:0] dmem_data_a;  // 端口A读数据 (CPU 读)
-    wire [31:0] dmem_data_b;  // 端口B读数据 (测试读)
+    wire [31:0] dmem_data_a;
+    wire [31:0] dmem_data_b;
 
-    // 仲裁器到 data_storage 的信号
+    // mem_arbiter 到 data_storage
     wire [31:0] mem_addr_a;
     wire [31:0] mem_rd_data_a;
     wire        mem_wr_en_b;
@@ -101,128 +89,98 @@ module cpu_core (
     wire [31:0] mem_wr_data_b;
     wire [31:0] mem_rd_data_b;
 
-
-    // 分支连接
+    // 分支
     wire        branch_taken;
     wire [31:0] branch_target;
 
-    // 前推连接
-    wire [1:0] fwd_a, fwd_b;
-
-    // 执行结果 (用于写回)
-    wire [31:0] exe_result;
-
-    // 前推结果
-    wire [31:0] fwd_alu_ex, fwd_alu_mem;
-    wire [4:0] fwd_rd_ex;
+    // 前推
+    wire [1:0]  fwd_a, fwd_b;
 
     // 流水线控制
-    wire stall, flush;
+    wire        stall, flush;
 
-    // 中断控制信号
-    wire irq_pending, irq_ack;
+    // 中断
+    wire        irq_pending, irq_ack;
     wire [31:0] irq_vector;
     wire [31:0] saved_pc, saved_status;
 
-    // 寄存器堆输出
+    // 寄存器堆
     wire [31:0] reg_a, reg_b;
 
-    // 指令存储器输出
+    // 指令存储器
     wire [31:0] imem_instr;
 
     // ============================================================
-    // 以下为组合逻辑和模块实例化
+    // 字段解码
     // ============================================================
+    wire [4:0]  rd_addr_a = ifidinstr[21:17];
+    wire [4:0]  rd_addr_b = ifidinstr[16:12];
 
-    // 指令字段解码 (组合逻辑) - 用于 ID/EX 阶段
-    wire [4:0]  opcode = idexinstr[31:27];
-    wire [4:0]  rd     = idexinstr[26:22];
-    wire [4:0]  rs1    = idexinstr[21:17];
-    wire [4:0]  rs2    = idexinstr[16:12];
-    wire [11:0] imm    = idexinstr[11:0];
+    wire [4:0]  ifid_opcode = ifidinstr[31:27];
+    wire        ifid_valid_for_ctrl = ifidvalid;
+    wire        flush_ext = 1'b0;
 
-    wire [4:0] rd_addr_a = ifidinstr[21:17];
-    wire [4:0] rd_addr_b = ifidinstr[16:12];
-
-    // 12位立即数符号扩展
-    wire signed [31:0] imm_se = {{20{imm[11]}}, imm};
-    
-    // 写回使能: JMP/INT/IRET 不写回
-    wire no_writeback = (opcode == `OP_JMP) ||
-                        (opcode == `OP_INT) ||
-                        (opcode == `OP_IRET);
-
-    // 流水线停顿控制
-    // 流水线停顿控制
-    // stall 和 flush 完全由 pipeline_controller 产生
-    wire [4:0] ifid_opcode = ifidinstr[31:27];
-    wire       ifid_valid_for_ctrl = ifidvalid;   // IF/ID 有效
-    wire       flush_ext;                          // 外部 flush（中断等）
+    // ============================================================
+    // dmem 接口 - 来自 EX/MEM (MEM 阶段)
+    // ============================================================
+    assign dmem_addr    = ex_alu_result;
+    assign dmem_wr_data = ex_rs2;
+    assign dmem_wr_en   = ex_mem_wr_en;
 
     // ============================================================
     // 模块实例化
     // ============================================================
 
-    // 7.1 寄存器堆
+    // 寄存器堆 (写回来自 MEM/WB)
     register_bank rf (
         .clk(clk),
         .rst_n(rst_n),
-        .wr_en(idexvalid && !no_writeback),
-        .wr_addr(rd),
-        .wr_data(exe_result),
+        .wr_en(mem_valid && mem_wr_en),
+        .wr_addr(mem_rd),
+        .wr_data(mem_result),
         .rd_addr_a(rd_addr_a),
         .rd_data_a(reg_a),
         .rd_addr_b(rd_addr_b),
         .rd_data_b(reg_b)
     );
 
-    // 7.2 指令存储器
+    // 指令存储器
     program_storage imem_inst (
-        .addr(pc),          // PC 是 32 位地址
-        .data(imem_instr)   // 取出的 32 位指令
+        .addr(pc),
+        .data(imem_instr)
     );
 
-    // ============================================================
-    // 7.3 存储器仲裁器
-    // ============================================================
+    // 存储器仲裁器
     mem_arbiter mem_arb_inst (
-        // CPU 侧
         .cpu_addr    (dmem_addr),
         .cpu_wr_en   (dmem_wr_en),
         .cpu_wr_data (dmem_wr_data),
         .cpu_rd_data (dmem_data_a),
-        // 测试侧
         .test_addr    (test_mem_addr),
         .test_wr_en   (test_mem_wr_en),
         .test_wr_data (test_mem_wr_data),
         .test_rd_data (dmem_data_b),
-        // 到 data_storage 端口A
         .mem_addr_a    (mem_addr_a),
         .mem_rd_data_a (mem_rd_data_a),
-        // 到 data_storage 端口B
         .mem_wr_en_b   (mem_wr_en_b),
         .mem_addr_b    (mem_addr_b),
         .mem_wr_data_b (mem_wr_data_b),
         .mem_rd_data_b (mem_rd_data_b)
     );
 
-    // ============================================================
-    // 7.4 数据存储器 (纯存储)
-    // ============================================================
+    // 数据存储器
     data_storage dmem_inst (
         .clk(clk),
         .rst_n(rst_n),
-        // 端口A: 只读
         .addr_a    (mem_addr_a),
         .rd_data_a (mem_rd_data_a),
-        // 端口B: 读写
         .wr_en_b   (mem_wr_en_b),
         .addr_b    (mem_addr_b),
         .wr_data_b (mem_wr_data_b),
         .rd_data_b (mem_rd_data_b)
     );
 
-    // 7.4 中断控制器
+    // 中断控制器
     interrupt_handler irq_inst (
         .clk(clk),
         .rst_n(rst_n),
@@ -238,9 +196,7 @@ module cpu_core (
         .irq_vector(irq_vector)
     );
 
-    // ============================================================
-    // 8. 取指阶段 (IF) 实例化
-    // ============================================================
+    // 取指
     instruction_fetcher if_inst (
         .clk(clk),
         .rst_n(rst_n),
@@ -259,9 +215,7 @@ module cpu_core (
         .if_valid(if_valid)
     );
 
-    // ============================================================
-    // 9. IF/ID 流水线寄存器
-    // ============================================================
+    // IF/ID 流水线寄存器
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             ifidinstr <= 32'b0;
@@ -278,9 +232,7 @@ module cpu_core (
         end
     end
 
-    // ============================================================
-    // 10. 译码阶段 (ID) 实例化
-    // ============================================================
+    // 译码 (内含 ID/EX 寄存器)
     instruction_decoder id_inst (
         .clk(clk),
         .rst_n(rst_n),
@@ -293,14 +245,14 @@ module cpu_core (
         .reg_rd_addr_b(rd_addr_b),
         .reg_rd_data_a(reg_a),
         .reg_rd_data_b(reg_b),
-        .fwd_alu_ex(fwd_alu_ex),
-        .fwd_alu_mem(fwd_alu_mem),
-        .fwd_rd_ex(fwd_rd_ex),
-        .fwd_rd_mem(idexrd),
+        .fwd_alu_ex(ex_alu_result),    // EX/MEM 结果
+        .fwd_alu_mem(mem_result),      // MEM/WB 结果
+        .fwd_rd_ex(ex_rd),             // EX/MEM rd
+        .fwd_rd_mem(mem_rd),           // MEM/WB rd
         .fwd_valid_ex(ex_valid),
-        .fwd_valid_mem(idexvalid),
-        .fwd_wr_en_ex(ex_reg_wr_en),
-        .fwd_wr_en_mem(idexvalid && !no_writeback),
+        .fwd_valid_mem(mem_valid),
+        .fwd_wr_en_ex(ex_valid && ex_reg_wr_en && !ex_is_load),  // 排除 LW
+        .fwd_wr_en_mem(mem_valid && mem_wr_en),
         .fwd_a(fwd_a),
         .fwd_b(fwd_b),
         .id_pc(id_pc),
@@ -316,9 +268,7 @@ module cpu_core (
         .id_is_alu(id_is_alu)
     );
 
-    // ============================================================
-    // 11. 执行阶段 (EX) 实例化
-    // ============================================================
+    // 执行 (内含 EX/MEM 寄存器)
     arithmetic_unit ex_inst (
         .clk(clk),
         .rst_n(rst_n),
@@ -333,12 +283,6 @@ module cpu_core (
         .id_is_jump(id_is_jump),
         .id_is_load(id_is_load),
         .id_is_alu(id_is_alu),
-        .stall(stall),
-        .flush(flush),
-        .dmem_rd_data(dmem_data_a),  // 使用端口A读数据
-        .dmem_addr(dmem_addr),
-        .dmem_wr_data(dmem_wr_data),
-        .dmem_wr_en(dmem_wr_en),
         .branch_taken(branch_taken),
         .branch_target(branch_target),
         .int_trigger(int_trigger),
@@ -351,71 +295,78 @@ module cpu_core (
         .ex_reg_wr_en(ex_reg_wr_en),
         .ex_is_load(ex_is_load),
         .ex_is_alu(ex_is_alu),
-        .fwd_alu_ex(fwd_alu_ex),
-        .fwd_alu_mem(fwd_alu_mem),
-        .fwd_rd_ex(fwd_rd_ex),
         .debug_alu(debug_alu_result)
     );
 
-    // ============================================================
-    // 12. 流水线控制器
-    // ============================================================
+    // 流水线控制器
     pipeline_controller ctrl_inst (
-        .clk         (clk),
-        .rst_n       (rst_n),
-        .ifid_opcode (ifid_opcode),        // ← 用 IF/ID 的 opcode
-        .ifid_valid  (ifid_valid_for_ctrl),
-        .flush_in    (flush_ext),          // ← 外部 flush（可选）
-        .pause       (pause),              // ← 新增：外部暂停请求
-        .stall       (stall),
-        .flush       (flush)
+        .clk(clk),
+        .rst_n(rst_n),
+        .ifid_opcode(ifid_opcode),
+        .ifid_valid(ifid_valid_for_ctrl),
+        .flush_in(flush_ext),
+        .pause(pause),
+        .stall(stall),
+        .flush(flush)
     );
 
-    // ============================================================
-    // 13. 前推单元 - 使用 IF/ID 流水线中的指令
-    // ============================================================
+    // 数据前推
     data_forwarder fwd_inst (
-        .id_rs1   (rd_addr_a),
-        .id_rs2   (rd_addr_b),
-        .ex_rd (fwd_rd_ex),
-        .mem_rd   (idexrd),
-        .ex_valid (ex_valid),
-        .mem_valid(idexvalid),
-        .ex_wr_en (ex_reg_wr_en),
-        // ★★★ MEM 阶段写寄存器使能，排除 R0（R0 不需要前推）★★★
-        .mem_wr_en(idexvalid && !no_writeback && (idexrd != 5'b0)),
-        .fwd_a    (fwd_a),
-        .fwd_b    (fwd_b)
+        .id_rs1(rd_addr_a),
+        .id_rs2(rd_addr_b),
+        .ex_rd(ex_rd),
+        .mem_rd(mem_rd),
+        .ex_valid(ex_valid),
+        .mem_valid(mem_valid),
+        .ex_wr_en(ex_valid && ex_reg_wr_en && !ex_is_load),  // 排除 LW
+        .mem_wr_en(mem_valid && mem_wr_en),
+        .fwd_a(fwd_a),
+        .fwd_b(fwd_b)
     );
 
     // ============================================================
-    // 14. ID/EX 流水线寄存器
+    // MEM/WB 流水线寄存器 - 主路径 (memory_access)
     // ============================================================
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            idexinstr   <= 32'b0;
-            idexpc      <= 32'b0;
-            idexrs1val  <= 32'b0;
-            idexrs2val  <= 32'b0;
-            idexrd      <= 5'b0;
-            idexvalid   <= 1'b0;
-        end else if (!stall && id_valid) begin
-            idexinstr   <= id_instr;
-            idexpc      <= id_pc;
-            idexrs1val  <= id_rs1;
-            idexrs2val  <= id_rs2;
-            idexrd      <= id_rd;
-            idexvalid   <= 1'b1;
-        end
-    end
+    memory_access mem_access_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .flush(flush),
+        .ex_alu_result(ex_alu_result),
+        .ex_rs2(ex_rs2),
+        .ex_rd(ex_rd),
+        .ex_valid(ex_valid),
+        .ex_mem_wr_en(ex_mem_wr_en),
+        .ex_is_load(ex_is_load),
+        .ex_is_alu(ex_is_alu),
+        .dmem_rd_data(dmem_data_a),
+        .mem_result(mem_result),
+        .mem_rd(mem_rd),
+        .mem_valid(mem_valid),
+        .mem_wr_en(mem_wr_en)
+    );
 
     // ============================================================
-    // 15. 执行结果写回 (使用端口A数据)
+    // MEM/WB 流水线寄存器 - 备用路径 (result_writer)
+    // 与 memory_access 同源，用于验证与对照
+    // 输出未连接到寄存器堆，避免冲突
     // ============================================================
-    assign exe_result = ex_is_load ? dmem_data_a : ex_alu_result;
+    result_writer result_writer_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .ex_result(ex_alu_result),
+        .ex_rd(ex_rd),
+        .ex_valid(ex_valid),
+        .ex_is_load(ex_is_load),
+        .ex_is_alu(ex_is_alu),
+        .dmem_data(dmem_data_a),
+        .mem_result(wb_result_alt),
+        .mem_rd(wb_rd_alt),
+        .mem_valid(wb_valid_alt),
+        .mem_wr_en(wb_wr_en_alt)
+    );
 
     // ============================================================
-    // 16. 中断激活状态
+    // 中断激活状态
     // ============================================================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -428,45 +379,29 @@ module cpu_core (
     end
 
     // ============================================================
-    // 17. 调试输出
+    // 调试输出
     // ============================================================
     assign debug_pc    = if_pc;
     assign debug_instr = if_instr;
 
     // ============================================================
-    // 18. 测试接口: 寄存器直接读写
+    // 测试接口: 寄存器读写
     // ============================================================
     always @(*) begin
         test_reg_read_data = 32'b0;
-        if (test_reg_addr >= 0 && test_reg_addr < 32) begin
+        if (test_reg_addr < 32)
             test_reg_read_data = rf.regs[test_reg_addr];
-        end
     end
     assign test_reg_rd_data = test_reg_read_data;
 
-    // 寄存器写入 (同步)
     always @(posedge clk) begin
-        if (test_reg_wr_en) begin
+        if (test_reg_wr_en)
             rf.regs[test_reg_addr] <= test_reg_wr_data;
-        end
     end
 
     // ============================================================
-    // 19. 测试接口: 内存直接读写 (直接访问内部mem)
-    // ============================================================
-    // ============================================================
-    // 19. 测试接口: 内存读
+    // 测试接口: 内存读
     // ============================================================
     assign test_mem_rd_data = dmem_data_b;
-    // always @(*) begin
-    //     test_mem_read_data = 32'b0;
-    //     if (test_mem_addr[7:0] >= 0 && test_mem_addr[7:0] < 256) begin
-    //         test_mem_read_data = dmem_inst.mem[test_mem_addr[7:0]];
-    //     end
-    // end
-    // assign test_mem_rd_data = test_mem_read_data;
-
-    // 内存写入 (已在 dmem_inst 中通过端口B处理)
-    // 不需要额外的 always 块
 
 endmodule
