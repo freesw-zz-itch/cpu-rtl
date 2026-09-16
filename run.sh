@@ -55,7 +55,7 @@ iverilog -g2012 -Wall -o build/cpu_sim \
     instruction_decoder.v \
     arithmetic_unit.v \
     memory_access.v \
-    result_writer.v \
+    write_back.v \
     data_forwarder.v \
     pipeline_controller.v \
     cpu_core.v \

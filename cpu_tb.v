@@ -271,7 +271,7 @@ module cpu_tb();
             $display("  [2] CPU reset complete. PC = 0x%08X", debug_pc);
 
             $display("  [3] Waiting for execution to complete...");
-            wait_for_pc(32'h00000018);
+            wait_for_pc(32'h0000001C);
 
             $display("  [4] Reading result...");
             read_reg(result_reg, result);

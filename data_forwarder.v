@@ -1,5 +1,6 @@
 // ============================================================
-// ����ǰ�Ƶ�Ԫ
+// 数据前推单元 (简化版)
+// wr_en 已隐含有效位，无需额外的 valid 信号
 // ============================================================
 
 `include "cpu_defines.v"
@@ -9,8 +10,6 @@ module data_forwarder (
     input  wire [4:0]  id_rs2,
     input  wire [4:0]  ex_rd,
     input  wire [4:0]  mem_rd,
-    input  wire        ex_valid,
-    input  wire        mem_valid,
     input  wire        ex_wr_en,
     input  wire        mem_wr_en,
     output reg  [1:0]  fwd_a,
@@ -21,14 +20,14 @@ module data_forwarder (
         fwd_a = `FWD_NONE;
         fwd_b = `FWD_NONE;
 
-        // EX/MEM ǰ�� (������ȼ�)
-        if (ex_valid && ex_wr_en && ex_rd != `REG_R0) begin
+        // EX/MEM 前推 (最高优先级)
+        if (ex_wr_en && ex_rd != `REG_R0) begin
             if (ex_rd == id_rs1) fwd_a = `FWD_EX;
             if (ex_rd == id_rs2) fwd_b = `FWD_EX;
         end
 
-        // MEM/WB ǰ��
-        if (mem_valid && mem_wr_en && mem_rd != `REG_R0) begin
+        // MEM/WB 前推
+        if (mem_wr_en && mem_rd != `REG_R0) begin
             if (mem_rd == id_rs1 && fwd_a == `FWD_NONE) fwd_a = `FWD_MEM;
             if (mem_rd == id_rs2 && fwd_b == `FWD_NONE) fwd_b = `FWD_MEM;
         end

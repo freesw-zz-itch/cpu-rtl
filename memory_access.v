@@ -1,12 +1,11 @@
 // ============================================================
-// 访存模块 - 5 级流水线的 MEM/WB 寄存器
-// 输出 MEM/WB 流水线寄存器
+// 访存阶段 (MEM) —— 纯组合逻辑
+// - 产生数据存储器接口
+// - 选择 LW 数据或 ALU 结果作为"待写回数据"
 // ============================================================
 
 module memory_access (
-    input  wire        clk,
-    input  wire        rst_n,
-    input  wire        flush,
+    // 来自 EX/MEM 寄存器
     input  wire [31:0] ex_alu_result,
     input  wire [31:0] ex_rs2,
     input  wire [4:0]  ex_rd,
@@ -14,28 +13,27 @@ module memory_access (
     input  wire        ex_mem_wr_en,
     input  wire        ex_is_load,
     input  wire        ex_is_alu,
+
+    // 到 data_storage 接口
+    output wire [31:0] dmem_addr,
+    output wire [31:0] dmem_wr_data,
+    output wire        dmem_wr_en,
     input  wire [31:0] dmem_rd_data,
-    output reg  [31:0] mem_result,
-    output reg  [4:0]  mem_rd,
-    output reg         mem_valid,
-    output reg         mem_wr_en
+
+    // 到 WB 阶段（组合信号）
+    output wire [31:0] mem_result,
+    output wire [4:0]  mem_rd,
+    output wire        mem_valid,
+    output wire        mem_wr_en
 );
 
-    wire [31:0] wb_data = ex_is_load ? dmem_rd_data : ex_alu_result;
+    assign dmem_addr    = ex_alu_result;
+    assign dmem_wr_data = ex_rs2;
+    assign dmem_wr_en   = ex_valid && ex_mem_wr_en;
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            mem_result <= 32'b0;
-            mem_rd     <= 5'b0;
-            mem_valid  <= 1'b0;
-            mem_wr_en  <= 1'b0;
-        end else begin
-            mem_result <= wb_data;
-            mem_rd     <= ex_rd;
-            mem_valid  <= ex_valid;
-            // ★★★ 修复：去掉 ex_rd != 0 的限制 ★★★
-            mem_wr_en  <= ex_valid && (ex_is_alu || ex_is_load);
-        end
-    end
+    assign mem_result   = ex_is_load ? dmem_rd_data : ex_alu_result;
+    assign mem_rd       = ex_rd;
+    assign mem_valid    = ex_valid;
+    assign mem_wr_en    = ex_valid && (ex_is_alu || ex_is_load);
 
 endmodule

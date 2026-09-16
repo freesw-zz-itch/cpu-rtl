@@ -1,6 +1,5 @@
 // ============================================================
-// È¡Ö¸Ä£¿é
-// ¸ù¾İPC´ÓÖ¸Áî´æ´¢Æ÷¶ÁÈ¡Ö¸Áî
+// å–æŒ‡æ¨¡å— (æ¸…ç†ç‰ˆ)
 // ============================================================
 
 module instruction_fetcher (
@@ -12,13 +11,10 @@ module instruction_fetcher (
     input  wire [31:0] branch_target,
     output wire [31:0] imem_addr,
     input  wire [31:0] imem_data,
-    // ÖĞ¶ÏÏìÓ¦
     input  wire        irq_ack,
     input  wire [31:0] irq_vector,
-    // ÖĞ¶Ï·µ»Ø
     input  wire        irq_ret,
     input  wire [31:0] saved_pc,
-    // Êä³öµ½ÒëÂë½×¶Î
     output reg  [31:0] if_pc,
     output reg  [31:0] if_instr,
     output reg         if_valid
@@ -26,28 +22,25 @@ module instruction_fetcher (
 
     reg [31:0] pc;
     reg [31:0] pc_next;
-    reg        if_flush;
 
     always @* begin
-        if (irq_ack) begin
+        if (irq_ack)
             pc_next = irq_vector;
-        end else if (irq_ret) begin
+        else if (irq_ret)
             pc_next = saved_pc;
-        end else if (branch_taken) begin
+        else if (branch_taken)
             pc_next = branch_target;
-        end else if (stall) begin
+        else if (stall)
             pc_next = pc;
-        end else begin
+        else
             pc_next = pc + 4;
-        end
     end
 
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            pc <= 32'h00000000;
-        end else if (!stall) begin
+        if (!rst_n)
+            pc <= 32'h0000_0000;
+        else if (!stall)
             pc <= pc_next;
-        end
     end
 
     assign imem_addr = pc;
