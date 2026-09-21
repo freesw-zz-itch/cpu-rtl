@@ -24,8 +24,6 @@ module instruction_decoder (
     input  wire [31:0] fwd_alu_mem,     // MEM/WB 结果
     input  wire [4:0]  fwd_rd_ex,       // EX/MEM rd
     input  wire [4:0]  fwd_rd_mem,      // MEM/WB rd
-    input  wire        fwd_valid_ex,
-    input  wire        fwd_valid_mem,
     input  wire        fwd_wr_en_ex,
     input  wire        fwd_wr_en_mem,
     input  wire [1:0]  fwd_a,
@@ -57,8 +55,8 @@ module instruction_decoder (
     wire is_load   = (opcode == `OP_LW);
     wire is_alu    = `IS_ALU_OP(opcode);
 
-    // 分支/跳转不进入 ID/EX
-    wire id_valid_next = if_valid && !is_branch && !is_jump;
+    // BEQ/JMP 也进入 ID/EX，以便在 EX 阶段判断
+    wire id_valid_next = if_valid;
 
     assign reg_rd_addr_a = rs1;
     assign reg_rd_addr_b = rs2;

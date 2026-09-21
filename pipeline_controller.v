@@ -1,11 +1,3 @@
-// ============================================================
-// Á÷Ë®Ïß¿ØÖÆÆ÷ - 5 ¼¶Á÷Ë®Ïß
-// - »ùÓÚ IF/ID µÄ opcode ´¥·¢Í£¶Ù
-// - ¼ÆÊıÆ÷¿ØÖÆÍ£¶ÙÖÜÆÚ
-// - ·ÖÖ§/Ìø×ª²úÉú flush
-// - pause Íâ²¿ÔİÍ£
-// ============================================================
-
 `include "cpu_defines.v"
 
 module pipeline_controller (
@@ -13,16 +5,25 @@ module pipeline_controller (
     input  wire        rst_n,
     input  wire [4:0]  ifid_opcode,
     input  wire        ifid_valid,
+    input  wire [4:0]  ifid_rs1,
+    input  wire [4:0]  ifid_rs2,
+    input  wire [4:0]  idex_rd,
+    input  wire        idex_rd_valid,
+    input  wire        branch_taken,        // â˜… æ–°å¢
     input  wire        flush_in,
     input  wire        pause,
     output reg         stall,
     output reg         flush
 );
 
+    wire raw_hazard = idex_rd_valid &&
+                  (idex_rd != 5'b0) &&
+                  ((idex_rd == ifid_rs1) || (idex_rd == ifid_rs2));
+
+    // å›ºå®šåœé¡¿è®¡æ•°å™¨
     reg [1:0] stall_cnt;
     reg [1:0] stall_req;
 
-    // Í£¶ÙÇëÇóÅĞ¶Ï
     always @* begin
         stall_req = 2'd0;
         if (ifid_valid) begin
@@ -35,30 +36,25 @@ module pipeline_controller (
         end
     end
 
-    // Í£¶Ù¼ÆÊıÆ÷
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
+        if (!rst_n)
             stall_cnt <= 2'd0;
-        end else if (flush_in) begin
+        else if (flush_in || branch_taken)
             stall_cnt <= 2'd0;
-        end else if (stall_cnt == 2'd0) begin
+        else if (stall_cnt == 2'd0) begin
             if (stall_req != 2'd0)
                 stall_cnt <= stall_req;
-        end else begin
+        end else
             stall_cnt <= stall_cnt - 2'd1;
-        end
     end
 
-    // stall Êä³ö
     always @* begin
-        stall = (stall_cnt != 2'd0) || pause;
+        stall = (stall_cnt != 2'd0) || raw_hazard || pause;
     end
 
-    // flush Êä³ö
+    // flush = å¤–éƒ¨ + åˆ†æ”¯
     always @* begin
-        flush = flush_in;
-        if (ifid_valid && (ifid_opcode == `OP_BEQ || ifid_opcode == `OP_JMP))
-            flush = 1'b1;
+        flush = flush_in || branch_taken;
     end
 
 endmodule
